@@ -30,9 +30,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Ignore errors - script might not be loaded yet
       });
 
-      // Inject content script and execute typing
+      // Inject content script into main page and all frames
       chrome.scripting.executeScript({
-        target: { tabId: tabId },
+        target: { tabId: tabId, allFrames: true },
         files: ['content.js']
       }, (results) => {
         if (chrome.runtime.lastError) {
@@ -41,20 +41,52 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
         
-        // Wait a bit for script to initialize and cleanup, then send message
+        // Wait a bit for script to initialize and cleanup, then send message to all frames
         setTimeout(() => {
-          chrome.tabs.sendMessage(tabId, {
-            action: 'startTyping',
-            text: message.text,
-            cursorInfo: message.cursorInfo
+          // Inject function to start typing in all frames (since sendMessage only goes to main frame)
+          chrome.scripting.executeScript({
+            target: { tabId: tabId, allFrames: true },
+            func: (text, cursorInfo) => {
+              // Trigger typing in this frame's context
+              if (window.__typeFakeMessageListener) {
+                const mockMessage = {
+                  action: 'startTyping',
+                  text: text,
+                  cursorInfo: cursorInfo
+                };
+                const mockSender = {};
+                let responseSent = false;
+                const mockSendResponse = (response) => {
+                  if (!responseSent) {
+                    responseSent = true;
+                    // Send response back to background
+                    chrome.runtime.sendMessage({ 
+                      action: 'typingResponse', 
+                      success: response.success,
+                      error: response.error 
+                    }).catch(() => {});
+                  }
+                };
+                window.__typeFakeMessageListener(mockMessage, mockSender, mockSendResponse);
+              }
+            },
+            args: [message.text, message.cursorInfo]
           }).then(() => {
             safeSendResponse({ success: true });
           }).catch((error) => {
-            // Only log if it's not a "receiving end doesn't exist" error (which is expected sometimes)
-            if (!error.message || !error.message.includes("Could not establish connection")) {
-              console.error('Error sending message to content script:', error);
-            }
-            safeSendResponse({ success: false, error: error.message });
+            // Also try regular sendMessage as fallback
+            chrome.tabs.sendMessage(tabId, {
+              action: 'startTyping',
+              text: message.text,
+              cursorInfo: message.cursorInfo
+            }).then(() => {
+              safeSendResponse({ success: true });
+            }).catch((sendError) => {
+              if (!sendError.message || !sendError.message.includes("Could not establish connection")) {
+                console.error('Error sending message to content script:', sendError);
+              }
+              safeSendResponse({ success: false, error: sendError.message });
+            });
           });
         }, 200); // Longer delay to ensure cleanup
       });

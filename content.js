@@ -65,10 +65,20 @@ function randomDelay(min, max) {
       return codeMirrorTextarea;
     }
 
-    // Monaco Editor uses .monaco-editor textarea
-    const monacoTextarea = document.querySelector('.monaco-editor textarea, .monaco-editor .inputarea');
+    // Monaco Editor uses .monaco-editor textarea (can be hidden)
+    const monacoTextarea = document.querySelector('.monaco-editor textarea, .monaco-editor .inputarea, textarea.monaco-mouse-cursor-text');
     if (monacoTextarea) {
       return monacoTextarea;
+    }
+    
+    // Also check for Monaco editor container and find textarea within
+    const monacoEditor = document.querySelector('.monaco-editor, [class*="monaco"]');
+    if (monacoEditor) {
+      const textarea = monacoEditor.querySelector('textarea');
+      if (textarea) return textarea;
+      // Monaco sometimes uses contenteditable divs
+      const contentEditable = monacoEditor.querySelector('[contenteditable="true"]');
+      if (contentEditable) return contentEditable;
     }
 
     // Ace Editor
@@ -109,11 +119,45 @@ function randomDelay(min, max) {
       }
     }
 
-    // Strategy 5: Look for elements with role="textbox"
-    const textboxes = document.querySelectorAll('[role="textbox"]');
+    // Strategy 5: Look for elements with role="textbox" or role="textbox"
+    const textboxes = document.querySelectorAll('[role="textbox"], [role="combobox"]');
     for (const textbox of textboxes) {
       if (textbox.contentEditable === 'true' || textbox.isContentEditable) {
         return textbox;
+      }
+      // Also check if it contains an input
+      const innerInput = textbox.querySelector('input, textarea');
+      if (innerInput) {
+        return innerInput;
+      }
+    }
+
+    // Strategy 6: Look for Zybooks-specific patterns (common class names)
+    const zybooksPatterns = [
+      '.code-input',
+      '.editor-input',
+      '.text-editor',
+      '[data-editor]',
+      '.ace_editor',
+      '.CodeMirror'
+    ];
+    
+    for (const pattern of zybooksPatterns) {
+      try {
+        const element = document.querySelector(pattern);
+        if (element) {
+          // Find input/textarea within
+          const input = element.querySelector('input, textarea, [contenteditable="true"]');
+          if (input) {
+            return input;
+          }
+          // Or check if element itself is editable
+          if (element.contentEditable === 'true' || element.isContentEditable) {
+            return element;
+          }
+        }
+      } catch (e) {
+        // Invalid selector, skip
       }
     }
 
@@ -175,19 +219,22 @@ function randomDelay(min, max) {
   }
 
   // Insert text at cursor for contenteditable (handles complex structures)
-  function insertTextAtCursor(text) {
-    const sel = window.getSelection();
+  function insertTextAtCursor(text, element) {
+    // Use the element's document's selection API
+    const elementDoc = element.ownerDocument;
+    const elementWindow = elementDoc.defaultView;
+    const sel = elementWindow.getSelection();
     if (sel.rangeCount > 0) {
       const range = sel.getRangeAt(0);
       range.deleteContents();
-      const textNode = document.createTextNode(text);
+      const textNode = elementDoc.createTextNode(text);
       range.insertNode(textNode);
       range.setStartAfter(textNode);
       range.collapse(true);
       sel.removeAllRanges();
       sel.addRange(range);
     }
-}
+  }
 
   // Type a single character (handles tabs, newlines, and special chars)
   async function typeCharacter(element, char, isContentEditable) {
@@ -208,7 +255,7 @@ function randomDelay(min, max) {
         element.selectionStart = element.selectionEnd = start + 1;
         dispatchInputEvent(element);
       } else if (isContentEditable) {
-        insertTextAtCursor('\n');
+        insertTextAtCursor('\n', element);
         dispatchInputEvent(element);
       }
       dispatchKeyEvent(element, 'keypress', key, keyCode, keyCode);
@@ -229,7 +276,7 @@ function randomDelay(min, max) {
         element.selectionStart = element.selectionEnd = start + 1;
         dispatchInputEvent(element);
       } else if (isContentEditable) {
-        insertTextAtCursor('\t');
+        insertTextAtCursor('\t', element);
         dispatchInputEvent(element);
       }
       dispatchKeyEvent(element, 'keypress', key, keyCode, keyCode);
@@ -252,10 +299,10 @@ function randomDelay(min, max) {
       // Insert character
       element.value = valueBefore.substring(0, start) + char + valueBefore.substring(end);
       element.selectionStart = element.selectionEnd = start + 1;
-    } else if (isContentEditable) {
-      // For contenteditable, use selection API
-      insertTextAtCursor(char);
-    }
+      } else if (isContentEditable) {
+        // For contenteditable, use selection API
+        insertTextAtCursor(char, element);
+      }
     
     // Dispatch events - but prevent them from inserting again
     const keydownEvent = new KeyboardEvent('keydown', {
@@ -301,6 +348,7 @@ function randomDelay(min, max) {
   async function moveCursorLeft(element, isContentEditable) {
     const keyCode = 37; // Left arrow
     const isInput = element.tagName === 'INPUT' || element.tagName === 'TEXTAREA';
+    const elementWindow = element.ownerDocument.defaultView;
     
     dispatchKeyEvent(element, 'keydown', 'ArrowLeft', keyCode, keyCode);
     
@@ -310,7 +358,7 @@ function randomDelay(min, max) {
         element.selectionStart = element.selectionEnd = start - 1;
       }
     } else if (isContentEditable) {
-      const sel = window.getSelection();
+      const sel = elementWindow.getSelection();
       if (sel.rangeCount > 0) {
         const range = sel.getRangeAt(0);
         range.collapse(true);
@@ -330,6 +378,7 @@ function randomDelay(min, max) {
   async function moveCursorRight(element, isContentEditable) {
     const keyCode = 39; // Right arrow
     const isInput = element.tagName === 'INPUT' || element.tagName === 'TEXTAREA';
+    const elementWindow = element.ownerDocument.defaultView;
     
     dispatchKeyEvent(element, 'keydown', 'ArrowRight', keyCode, keyCode);
     
@@ -341,7 +390,7 @@ function randomDelay(min, max) {
         element.selectionStart = element.selectionEnd = end + 1;
       }
     } else if (isContentEditable) {
-      const sel = window.getSelection();
+      const sel = elementWindow.getSelection();
       if (sel.rangeCount > 0) {
         const range = sel.getRangeAt(0);
         range.collapse(false);
@@ -385,7 +434,8 @@ function randomDelay(min, max) {
       element.value = element.value.substring(0, newStart) + element.value.substring(end);
       element.selectionStart = element.selectionEnd = newStart;
     } else if (isContentEditable) {
-      const sel = window.getSelection();
+      const elementWindow = element.ownerDocument.defaultView;
+      const sel = elementWindow.getSelection();
       if (sel.rangeCount > 0) {
         const range = sel.getRangeAt(0);
         if (range.collapsed) {
@@ -462,46 +512,58 @@ function randomDelay(min, max) {
   }
 
   // Main typing function
-  async function typeText(text, cursorInfo, sessionId) {
+  async function typeText(text, cursorInfo, sessionId, providedElement = null) {
     // Check if this session is still active
     if (sessionId && window.__typeFakeCurrentSession !== sessionId) {
       return; // This session was cancelled
     }
-    // Find focused element - try multiple methods
-    let activeElement = document.activeElement;
     
-    // If no active element or it's not editable, try to find editable element
-    if (!activeElement || 
-        (activeElement.tagName !== 'INPUT' && 
-         activeElement.tagName !== 'TEXTAREA' && 
-         activeElement.contentEditable !== 'true' && 
-         !activeElement.isContentEditable)) {
+    // Use provided element if available, otherwise find it
+    let activeElement = providedElement;
+    
+    if (!activeElement) {
+      // Find focused element - try multiple methods
+      activeElement = document.activeElement;
       
-      // Try to find editable element from current element
-      activeElement = findEditableElement(activeElement);
-      
-      // If still nothing, use advanced search
-  if (!activeElement) {
-        activeElement = findEditableElementAdvanced();
+      // If no active element or it's not editable, try to find editable element
+      if (!activeElement || 
+          (activeElement.tagName !== 'INPUT' && 
+           activeElement.tagName !== 'TEXTAREA' && 
+           activeElement.contentEditable !== 'true' && 
+           !activeElement.isContentEditable)) {
+        
+        // Try to find editable element from current element
+        activeElement = findEditableElement(activeElement);
+        
+        // If still nothing, use advanced search
+        if (!activeElement) {
+          activeElement = findEditableElementAdvanced();
+        }
+        
+        // If we found something, focus it
+        if (activeElement) {
+          activeElement.focus();
+          // Small delay to ensure focus is set
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
       }
-      
-      // If we found something, focus it
-      if (activeElement) {
-        activeElement.focus();
-        // Small delay to ensure focus is set
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
+    } else {
+      // Ensure provided element is focused
+      activeElement.focus();
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
     
     if (!activeElement) {
       console.error('No editable element found. Make sure you click inside an input field first.');
-      alert('Could not find an editable field. Please click inside the text input area first.');
-    return;
-  }
+      throw new Error('Could not find an editable field. Please click inside the text input area first.');
+    }
 
-    // Ensure element is focused
-    if (activeElement !== document.activeElement) {
-  activeElement.focus();
+    // Ensure element is focused - use the element's document context
+    const elementDoc = activeElement.ownerDocument;
+    const elementWindow = elementDoc.defaultView;
+    
+    if (activeElement !== elementDoc.activeElement) {
+      activeElement.focus();
       await new Promise(resolve => setTimeout(resolve, 50));
     }
 
@@ -509,22 +571,56 @@ function randomDelay(min, max) {
     const isInput = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
     const isContentEditable = activeElement.contentEditable === 'true' || activeElement.isContentEditable;
     
-    if (!isInput && !isContentEditable) {
-      // Last resort: try to find ANY editable element on the page
-      const fallback = findEditableElementAdvanced();
+    // Special case: Monaco editor textareas can be hidden but still functional
+    const isMonacoTextarea = activeElement.tagName === 'TEXTAREA' && 
+      (activeElement.classList.contains('monaco-mouse-cursor-text') || 
+       activeElement.closest('.monaco-editor') !== null);
+    
+    if (!isInput && !isContentEditable && !isMonacoTextarea) {
+      // Last resort: try to find ANY editable element in the element's document context
+      const elementDoc = activeElement.ownerDocument;
+      const elementWindow = elementDoc.defaultView;
+      
+      // Search in the element's document (important for iframes)
+      let fallback = null;
+      
+      // Try Monaco editor patterns in this document
+      const monaco = elementDoc.querySelector('.monaco-editor textarea, .monaco-editor .inputarea, textarea.monaco-mouse-cursor-text');
+      if (monaco) {
+        fallback = monaco;
+      } else {
+        const monacoContainer = elementDoc.querySelector('.monaco-editor, [class*="monaco"]');
+        if (monacoContainer) {
+          const textarea = monacoContainer.querySelector('textarea');
+          if (textarea) fallback = textarea;
+          else {
+            const contentEditable = monacoContainer.querySelector('[contenteditable="true"]');
+            if (contentEditable) fallback = contentEditable;
+          }
+        }
+      }
+      
+      // If still nothing, try general search in element's document
+      if (!fallback) {
+        fallback = elementDoc.querySelector('input[type="text"], input:not([type]), textarea, [contenteditable="true"]');
+      }
+      
       if (fallback && (fallback.tagName === 'INPUT' || fallback.tagName === 'TEXTAREA' || 
           fallback.contentEditable === 'true' || fallback.isContentEditable)) {
+        console.log('typeFake: Using fallback element:', fallback.tagName, fallback.className);
         activeElement = fallback;
         activeElement.focus();
         await new Promise(resolve => setTimeout(resolve, 100));
       } else {
-        console.error('Element is not editable:', activeElement);
-        console.error('Element details:', {
+        console.error('typeFake: Element is not editable:', activeElement);
+        console.error('typeFake: Element details:', {
           tagName: activeElement.tagName,
           contentEditable: activeElement.contentEditable,
           isContentEditable: activeElement.isContentEditable,
           className: activeElement.className,
-          id: activeElement.id
+          id: activeElement.id,
+          isMonaco: isMonacoTextarea,
+          document: activeElement.ownerDocument === document ? 'main' : 'iframe'
         });
         alert('Could not find an editable field. The page might use a custom editor. Try clicking directly in the text input area.');
         return;
@@ -562,8 +658,9 @@ function randomDelay(min, max) {
         
         const char = text[i];
         
-        // Re-check focus in case it was lost
-        if (document.activeElement !== activeElement) {
+        // Re-check focus in case it was lost - use element's document
+        const elementDoc = activeElement.ownerDocument;
+        if (elementDoc.activeElement !== activeElement) {
           activeElement.focus();
         }
         
@@ -723,75 +820,253 @@ function randomDelay(min, max) {
   function waitForClickPosition() {
     return new Promise((resolve) => {
       let clicked = false;
+      let clickTarget = null;
+      let clickTime = null;
       
       const clickHandler = (e) => {
         if (clicked) return;
         
-        // Get the clicked element
-        const target = e.target;
-        const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
-        const isContentEditable = target.contentEditable === 'true' || target.isContentEditable;
+        // Store click info
+        clickTarget = e.target;
+        clickTime = Date.now();
+        clicked = true;
         
-        if (isInput || isContentEditable) {
-          clicked = true;
+        console.log('typeFake: Click detected on', clickTarget.tagName, clickTarget.className);
+        
+        // Remove listener immediately to prevent multiple clicks
+        document.removeEventListener('click', clickHandler, true);
+        document.body.removeEventListener('click', clickHandler, true);
+        
+        // Wait and retry finding editable element (Zybooks may need time to initialize)
+        const findEditableWithRetry = (attempts = 0) => {
+          if (attempts > 10) {
+            // After 10 attempts (2 seconds), give up
+            console.error('typeFake: Could not find editable element after click after', attempts, 'attempts');
+            console.log('typeFake: Clicked element:', clickTarget);
+            console.log('typeFake: Clicked element parent:', clickTarget.parentElement);
+            resolve({ element: null, cursorInfo: null });
+            return;
+          }
           
-          // Wait a moment for browser to set cursor position after click
-          setTimeout(() => {
-            // Focus the element
-            target.focus();
-            
-            // Get cursor position after click
-            let cursorInfo = null;
-            if (isInput) {
-              // Use actual selection position
-              cursorInfo = {
-                type: 'input',
-                selectionStart: target.selectionStart || 0,
-                selectionEnd: target.selectionEnd || 0
-              };
-            } else if (isContentEditable) {
-              // For contenteditable, get selection
-              const sel = window.getSelection();
-              if (sel.rangeCount > 0) {
-                const range = sel.getRangeAt(0);
-                const walker = document.createTreeWalker(
-                  target,
-                  NodeFilter.SHOW_TEXT,
-                  null
-                );
-                let textOffset = 0;
-                let node = walker.nextNode();
-                while (node && node !== range.startContainer) {
-                  textOffset += node.textContent.length;
-                  node = walker.nextNode();
+          if (attempts > 0) {
+            console.log('typeFake: Retry attempt', attempts, 'to find editable element');
+          }
+          
+          // Try to find editable element
+          let editableElement = findEditableElement(clickTarget);
+          
+          // If not found, try searching from click position up the DOM tree more thoroughly
+          if (!editableElement) {
+            let current = clickTarget;
+            for (let i = 0; i < 20 && current; i++) {
+              // Check if element or any child is editable
+              if (current.contentEditable === 'true' || current.isContentEditable) {
+                editableElement = current;
+                break;
+              }
+              // Check for input/textarea in children
+              const childInput = current.querySelector && current.querySelector('input, textarea');
+              if (childInput) {
+                editableElement = childInput;
+                break;
+              }
+              current = current.parentElement;
+            }
+          }
+          
+          // Try advanced search
+          if (!editableElement) {
+            editableElement = findEditableElementAdvanced();
+          }
+          
+          // Check iframes (Zybooks uses Coding Rooms in iframes)
+          if (!editableElement) {
+            const iframes = document.querySelectorAll('iframe');
+            for (const iframe of iframes) {
+              try {
+                const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+                if (iframeDoc) {
+                  // Check if click was inside this iframe
+                  const iframeRect = iframe.getBoundingClientRect();
+                  const clickWasInIframe = clickTarget && 
+                    clickTarget.getBoundingClientRect &&
+                    clickTarget.getBoundingClientRect().top >= iframeRect.top &&
+                    clickTarget.getBoundingClientRect().left >= iframeRect.left &&
+                    clickTarget.getBoundingClientRect().bottom <= iframeRect.bottom &&
+                    clickTarget.getBoundingClientRect().right <= iframeRect.right;
+                  
+                  // Look for editable elements in iframe
+                  let iframeEditable = iframeDoc.querySelector('input, textarea, [contenteditable="true"]');
+                  
+                  // If not found, try Coding Rooms specific patterns
+                  if (!iframeEditable) {
+                    // Coding Rooms uses Monaco editor - search more aggressively
+                    const monaco = iframeDoc.querySelector('.monaco-editor textarea, .monaco-editor .inputarea, textarea.monaco-mouse-cursor-text, .monaco-editor [contenteditable="true"]');
+                    if (monaco) {
+                      iframeEditable = monaco;
+                    } else {
+                      // Try finding Monaco container first
+                      const monacoContainer = iframeDoc.querySelector('.monaco-editor, [class*="monaco"]');
+                      if (monacoContainer) {
+                        const textarea = monacoContainer.querySelector('textarea');
+                        if (textarea) iframeEditable = textarea;
+                        else {
+                          const contentEditable = monacoContainer.querySelector('[contenteditable="true"]');
+                          if (contentEditable) iframeEditable = contentEditable;
+                        }
+                      }
+                    }
+                  }
+                  
+                  // Also check for any visible contenteditable
+                  if (!iframeEditable) {
+                    const allEditables = iframeDoc.querySelectorAll('[contenteditable="true"]');
+                    for (const ed of allEditables) {
+                      const rect = ed.getBoundingClientRect();
+                      if (rect.width > 50 && rect.height > 20) { // Reasonable size
+                        iframeEditable = ed;
+                        break;
+                      }
+                    }
+                  }
+                  
+                  if (iframeEditable) {
+                    console.log('typeFake: Found editable element in iframe:', iframeEditable.tagName);
+                    editableElement = iframeEditable;
+                    // Store iframe reference for later use
+                    editableElement.__typeFakeIframe = iframe;
+                    break;
+                  }
                 }
-                if (node === range.startContainer) {
-                  textOffset += range.startOffset;
-                }
-                cursorInfo = {
-                  type: 'contenteditable',
-                  textOffset: textOffset,
-                  collapsed: range.collapsed
-                };
+              } catch (e) {
+                // Cross-origin iframe - try to access via postMessage or other methods
+                console.log('typeFake: Cross-origin iframe detected, cannot access directly');
+                // For cross-origin, we might need to use postMessage, but for now skip
               }
             }
+          }
+          
+          // Also check if clickTarget itself is in an iframe
+          if (!editableElement && clickTarget) {
+            try {
+              let frame = clickTarget.ownerDocument.defaultView;
+              if (frame && frame !== window) {
+                // We're in an iframe, search in this document
+                const iframeDoc = clickTarget.ownerDocument;
+                editableElement = iframeDoc.querySelector('input, textarea, [contenteditable="true"]');
+                if (!editableElement) {
+                  // Try Monaco editor patterns
+                  const monaco = iframeDoc.querySelector('.monaco-editor textarea, .monaco-editor .inputarea, textarea.monaco-mouse-cursor-text');
+                  if (monaco) {
+                    editableElement = monaco;
+                  } else {
+                    const monacoContainer = iframeDoc.querySelector('.monaco-editor, [class*="monaco"]');
+                    if (monacoContainer) {
+                      const textarea = monacoContainer.querySelector('textarea');
+                      if (textarea) editableElement = textarea;
+                      else {
+                        const contentEditable = monacoContainer.querySelector('[contenteditable="true"]');
+                        if (contentEditable) editableElement = contentEditable;
+                      }
+                    }
+                  }
+                }
+                if (editableElement) {
+                  console.log('typeFake: Found editable in iframe document:', editableElement.tagName);
+                }
+              }
+            } catch (e) {
+              console.log('typeFake: Error checking iframe context:', e);
+            }
+          }
+          
+          if (editableElement) {
+            console.log('typeFake: Found editable element:', editableElement.tagName, editableElement.className);
             
-            document.removeEventListener('click', clickHandler, true);
-            resolve({ element: target, cursorInfo: cursorInfo });
-          }, 50); // Small delay to let browser set cursor
-        }
+            // If element is in an iframe, we need to work in that iframe's context
+            const elementDoc = editableElement.ownerDocument;
+            const elementWindow = elementDoc.defaultView;
+            const isInIframe = elementWindow !== window;
+            
+            if (isInIframe) {
+              console.log('typeFake: Element is in iframe, using iframe context');
+              // We're in an iframe - the content script should be injected there too
+              // But we need to make sure we're using the right document
+            }
+            
+            // Found it! Now wait a bit for it to be ready, then get cursor position
+            setTimeout(() => {
+              editableElement.focus();
+              
+              // Additional wait for complex editors like Zybooks/Coding Rooms
+              setTimeout(() => {
+                // Get cursor position - use the element's document's selection API
+                let cursorInfo = null;
+                const isInput = editableElement.tagName === 'INPUT' || editableElement.tagName === 'TEXTAREA';
+                const isContentEditable = editableElement.contentEditable === 'true' || editableElement.isContentEditable;
+                
+                // Use the correct window/selection for iframe context
+                const selectionWindow = isInIframe ? elementWindow : window;
+                const selection = selectionWindow.getSelection();
+                
+                if (isInput) {
+                  cursorInfo = {
+                    type: 'input',
+                    selectionStart: editableElement.selectionStart || 0,
+                    selectionEnd: editableElement.selectionEnd || 0
+                  };
+                } else if (isContentEditable) {
+                  if (selection && selection.rangeCount > 0) {
+                    const range = selection.getRangeAt(0);
+                    const walker = elementDoc.createTreeWalker(
+                      editableElement,
+                      NodeFilter.SHOW_TEXT,
+                      null
+                    );
+                    let textOffset = 0;
+                    let node = walker.nextNode();
+                    while (node && node !== range.startContainer) {
+                      textOffset += node.textContent.length;
+                      node = walker.nextNode();
+                    }
+                    if (node === range.startContainer) {
+                      textOffset += range.startOffset;
+                    }
+                    cursorInfo = {
+                      type: 'contenteditable',
+                      textOffset: textOffset,
+                      collapsed: range.collapsed
+                    };
+                  }
+                }
+                
+                resolve({ element: editableElement, cursorInfo: cursorInfo });
+              }, 300); // Longer wait for Coding Rooms/Monaco editor
+            }, 150);
+          } else {
+            // Not found yet, retry after a short delay
+            setTimeout(() => findEditableWithRetry(attempts + 1), 200);
+          }
+        };
+        
+        // Start retry loop
+        findEditableWithRetry();
       };
       
-      // Add click listener
+      // Add click listener with capture to catch early
       document.addEventListener('click', clickHandler, true);
+      
+      // Also listen on document body as fallback
+      document.body.addEventListener('click', clickHandler, true);
       
       // Timeout after 30 seconds
       setTimeout(() => {
         if (!clicked) {
           document.removeEventListener('click', clickHandler, true);
-          // Use current active element as fallback
-          const activeElement = document.activeElement;
-          resolve({ element: activeElement, cursorInfo: null });
+          document.body.removeEventListener('click', clickHandler, true);
+          // Try to find any editable element as fallback
+          const fallbackElement = findEditableElementAdvanced();
+          resolve({ element: fallbackElement, cursorInfo: null });
         }
       }, 30000);
     });
@@ -812,6 +1087,36 @@ function randomDelay(min, max) {
       waitForClickPosition().then(({ element, cursorInfo }) => {
         // Only proceed if this is still the latest session request
         if (window.__typeFakeCurrentSession === null || window.__typeFakeCurrentSession < sessionId) {
+          // Check if we have a valid element
+          if (!element) {
+            chrome.runtime.sendMessage({ action: 'typingComplete' }).catch(() => {});
+            sendResponse({ success: false, error: 'No editable element found. Please click inside a text input area.' });
+            return;
+          }
+          
+          // Verify element is actually editable
+          const isInput = element.tagName === 'INPUT' || element.tagName === 'TEXTAREA';
+          const isContentEditable = element.contentEditable === 'true' || element.isContentEditable;
+          const isMonacoTextarea = element.tagName === 'TEXTAREA' && 
+            (element.classList.contains('monaco-mouse-cursor-text') || 
+             element.closest('.monaco-editor') !== null);
+          
+          console.log('typeFake: Element validation:', {
+            tagName: element.tagName,
+            isInput: isInput,
+            isContentEditable: isContentEditable,
+            isMonacoTextarea: isMonacoTextarea,
+            className: element.className,
+            inIframe: element.ownerDocument !== document
+          });
+          
+          if (!isInput && !isContentEditable && !isMonacoTextarea) {
+            console.error('typeFake: Element failed validation:', element);
+            chrome.runtime.sendMessage({ action: 'typingComplete' }).catch(() => {});
+            sendResponse({ success: false, error: 'Clicked element is not editable. Please click inside a text input area.' });
+            return;
+          }
+          
           window.__typeFakeCurrentSession = sessionId;
           
           // Reset flags
@@ -824,8 +1129,12 @@ function randomDelay(min, max) {
           // Notify that typing is starting
           chrome.runtime.sendMessage({ action: 'typingStarted' }).catch(() => {});
           
-          // Start typing at clicked position
-          typeText(message.text, finalCursorInfo, sessionId).then(() => {
+          // Ensure element is focused before starting
+          element.focus();
+          console.log('typeFake: Starting typing with element:', element.tagName, element.className);
+          
+          // Start typing at clicked position (pass element to ensure we use the right one)
+          typeText(message.text, finalCursorInfo, sessionId, element).then(() => {
             // Only send response if this is still the active session
             if (window.__typeFakeCurrentSession === sessionId) {
               // Notify that typing is complete
